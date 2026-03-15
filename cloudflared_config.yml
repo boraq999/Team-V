@@ -1,0 +1,9 @@
+tunnel: b0d8906c-06c6-441c-955f-97b419c0dd21
+credentials-file: C:\Users\ofifi\.cloudflared\b0d8906c-06c6-441c-955f-97b419c0dd21.json
+
+ingress:
+  - hostname: v.jree.com.ly
+    service: http://localhost:5173
+  - hostname: api-v.jree.com.ly
+    service: http://localhost:3001
+  - service: http_status:404
