@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { useSocket } from "../hooks/useSocket";
-import { useWebRTC } from "../hooks/useWebRTC";
 import { useToast } from "../context/ToastContext";
 import ChatPanel from "./ChatPanel";
 
@@ -16,10 +15,8 @@ export default function HostPanel() {
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const dataChannelRef = useRef(null);
-
-  const { createPeer, addStream, createOffer, setAnswer, addIceCandidate, close: closePeer, pc } =
-    useWebRTC({ onStream: null });
+  const peersRef = useRef(new Map()); // Map<clientId, RTCPeerConnection>
+  const dataChannelsRef = useRef(new Map()); // Map<clientId, RTCDataChannel>
 
   // ── Socket events ─────────────────────────────────────────
   useEffect(() => {
@@ -29,18 +26,32 @@ export default function HostPanel() {
       showToast("Session created! Share your code.", "success");
     });
 
-    const offJoined = on("host:client-joined", async ({ sessionId }) => {
+    const offJoined = on("host:client-joined", async ({ sessionId, clientId }) => {
+      // If we are waiting, move to connected status
       setStatus("connected");
-      showToast("Client connected! Starting stream...", "success");
-      await startOffer(sessionId);
+      showToast(`Client ${clientId.substring(0, 4)} connected!`, "success");
+      await startOffer(sessionId, clientId);
     });
 
-    const offAnswer = on("signal:answer", async ({ answer }) => {
-      await setAnswer(answer);
+    const offAnswer = on("signal:answer", async ({ answer, clientId }) => {
+      const pc = peersRef.current.get(clientId);
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer));
     });
 
-    const offIce = on("signal:ice", async ({ candidate }) => {
-      await addIceCandidate(candidate);
+    const offIce = on("signal:ice", async ({ candidate, clientId }) => {
+      const pc = peersRef.current.get(clientId);
+      if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
+    const offLeft = on("host:client-left", ({ clientId }) => {
+      const pc = peersRef.current.get(clientId);
+      if (pc) pc.close();
+      peersRef.current.delete(clientId);
+      dataChannelsRef.current.delete(clientId);
+      showToast(`Client ${clientId.substring(0, 4)} left`, "info");
+      
+      // If no more clients, go back to waiting (but keep stream active)
+      if (peersRef.current.size === 0) setStatus("waiting");
     });
 
     const offControl = on("control:event", ({ event }) => {
@@ -61,7 +72,7 @@ export default function HostPanel() {
     });
 
     return () => {
-      [offCreated, offJoined, offAnswer, offIce, offControl, offChat, offEnded, offError].forEach(
+      [offCreated, offJoined, offAnswer, offIce, offLeft, offControl, offChat, offEnded, offError].forEach(
         (fn) => typeof fn === "function" && fn()
       );
     };
@@ -83,14 +94,17 @@ export default function HostPanel() {
       if (videoRef.current) videoRef.current.srcObject = stream;
       setIsCapturing(true);
 
-      // CRITICAL: if a client is already connected, add the stream now
-      if (pc.current && pc.current.iceConnectionState !== "closed") {
-        console.log("[Host] Adding tracks to existing peer...");
-        stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
-        
-        // Renegotiate
-        const offer = await createOffer();
-        emit("signal:offer", { sessionId, offer });
+      // CRITICAL: if clients are already connected, add the stream now
+      for (const [clientId, pc] of peersRef.current.entries()) {
+        if (pc.iceConnectionState !== "closed") {
+          console.log(`[Host] Adding tracks to peer ${clientId}...`);
+          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+          
+          // Renegotiate
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          emit("signal:offer", { sessionId, offer, targetClientId: clientId });
+        }
       }
 
       showToast("Screen capture started", "info");
@@ -104,25 +118,33 @@ export default function HostPanel() {
     }
   };
 
-  const startOffer = async (sid) => {
-    const peerConn = createPeer();
+  const startOffer = async (sid, clientId) => {
+    // Manually create PeerConnection because useWebRTC handles only 1
+    const pc = new RTCPeerConnection({
+       iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }]
+    });
 
-    // Data channel for control events
-    const dc = peerConn.createDataChannel("control");
-    dataChannelRef.current = dc;
+    peersRef.current.set(clientId, pc);
+
+    // Data channel for control events (optional usage here)
+    const dc = pc.createDataChannel("control");
+    dataChannelsRef.current.set(clientId, dc);
 
     // Add stream if already capturing
-    if (streamRef.current) addStream(streamRef.current);
+    if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current));
+    }
 
     // ICE candidates
-    peerConn.onicecandidate = (e) => {
+    pc.onicecandidate = (e) => {
       if (e.candidate) {
-        emit("signal:ice", { sessionId: sid, candidate: e.candidate, from: "host" });
+        emit("signal:ice", { sessionId: sid, candidate: e.candidate, from: "host", target: clientId });
       }
     };
 
-    const offer = await createOffer();
-    emit("signal:offer", { sessionId: sid, offer });
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    emit("signal:offer", { sessionId: sid, offer, targetClientId: clientId });
   };
 
   // ── Remote control handler ────────────────────────────────
@@ -151,7 +173,13 @@ export default function HostPanel() {
 
   // ── End session ───────────────────────────────────────────
   const endSession = () => {
-    closePeer();
+    // Close all peers
+    for (const [clientId, pc] of peersRef.current.entries()) {
+        pc.close();
+    }
+    peersRef.current.clear();
+    dataChannelsRef.current.clear();
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -211,7 +239,7 @@ export default function HostPanel() {
         </h2>
         <span className={`status-badge ${status === "connected" ? "connected" : "waiting"}`}>
           <span className="dot" />
-          {status === "connected" ? "Client Connected" : "Waiting for client…"}
+          {status === "connected" ? `${peersRef.current.size} Clients Connected` : "Waiting for client…"}
         </span>
       </div>
 

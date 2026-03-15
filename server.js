@@ -42,7 +42,7 @@ io.on("connection", (socket) => {
     const sessionId = generateCode();
     sessions.set(sessionId, {
       hostSocketId: socket.id,
-      clientSocketId: null,
+      clientSocketIds: new Set(),
       mode: mode,
       createdAt: Date.now(),
     });
@@ -58,37 +58,37 @@ io.on("connection", (socket) => {
       socket.emit("error", { message: "Session not found or expired." });
       return;
     }
-    if (session.clientSocketId) {
-      socket.emit("error", { message: "Session already has a client." });
+    if (session.clientSocketIds.has(socket.id)) {
+      socket.emit("error", { message: "Already joined." });
       return;
     }
-    session.clientSocketId = socket.id;
+    session.clientSocketIds.add(socket.id);
     socket.join(sessionId);
-    // Notify host
-    io.to(session.hostSocketId).emit("host:client-joined", { sessionId });
-    socket.emit("client:joined", { sessionId });
-    console.log(`[Session] Client joined: ${sessionId}`);
+    // Notify host with the clientId so it can create a separate PeerConnection for them
+    io.to(session.hostSocketId).emit("host:client-joined", { sessionId, clientId: socket.id });
+    socket.emit("client:joined", { sessionId, clientId: socket.id });
+    console.log(`[Session] Client joined: ${sessionId} | ID: ${socket.id}`);
   });
 
   // ── WebRTC Signaling relay ──────────────────────────────────────────
-  socket.on("signal:offer", ({ sessionId, offer }) => {
+  socket.on("signal:offer", ({ sessionId, offer, targetClientId }) => {
     const session = sessions.get(sessionId);
     if (!session) return;
-    io.to(session.clientSocketId).emit("signal:offer", { offer });
+    io.to(targetClientId).emit("signal:offer", { offer });
   });
 
   socket.on("signal:answer", ({ sessionId, answer }) => {
+    // Senders are always clients, send back to host with sender's ID
     const session = sessions.get(sessionId);
     if (!session) return;
-    io.to(session.hostSocketId).emit("signal:answer", { answer });
+    io.to(session.hostSocketId).emit("signal:answer", { answer, clientId: socket.id });
   });
 
-  socket.on("signal:ice", ({ sessionId, candidate, from }) => {
+  socket.on("signal:ice", ({ sessionId, candidate, from, target }) => {
     const session = sessions.get(sessionId);
     if (!session) return;
-    const target =
-      from === "host" ? session.clientSocketId : session.hostSocketId;
-    io.to(target).emit("signal:ice", { candidate });
+    const dest = from === "host" ? target : session.hostSocketId;
+    io.to(dest).emit("signal:ice", { candidate, clientId: socket.id });
   });
 
   // ── Native OS remote control via nut-js ─────────────────────────────
@@ -140,20 +140,18 @@ io.on("connection", (socket) => {
   // ── Disconnect ──────────────────────────────────────────────────────
   socket.on("disconnect", () => {
     console.log(`[-] Disconnected: ${socket.id}`);
+    // Handle client disconnect directly
     for (const [sid, session] of sessions.entries()) {
-      if (
-        session.hostSocketId === socket.id ||
-        session.clientSocketId === socket.id
-      ) {
-        io.to(sid).emit("session:ended", {
-          reason:
-            session.hostSocketId === socket.id
-              ? "Host disconnected"
-              : "Client disconnected",
-        });
+      if (session.hostSocketId === socket.id) {
+        io.to(sid).emit("session:ended", { reason: "Host disconnected" });
         sessions.delete(sid);
-        console.log(`[Session] Ended: ${sid}`);
+        console.log(`[Session] Ended: ${sid} (Host left)`);
         break;
+      } else if (session.clientSocketIds.has(socket.id)) {
+        session.clientSocketIds.delete(socket.id);
+        io.to(session.hostSocketId).emit("host:client-left", { clientId: socket.id });
+        console.log(`[Session] Client left: ${sid} | ID: ${socket.id}`);
+        // We do not end the session, just notify host that one client left
       }
     }
   });
