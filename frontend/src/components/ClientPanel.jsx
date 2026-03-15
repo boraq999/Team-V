@@ -13,6 +13,7 @@ export default function ClientPanel() {
   const [status, setStatus] = useState("idle"); // idle | joining | connected
   const [chatMessages, setChatMessages] = useState([]);
   const [remoteStream, setRemoteStream] = useState(null);
+  const [videoQuality, setVideoQuality] = useState("medium");
 
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -142,6 +143,13 @@ export default function ClientPanel() {
     }
   };
 
+  const changeQuality = (e) => {
+    const q = e.target.value;
+    setVideoQuality(q);
+    emit("control:event", { sessionId, event: { type: "quality", value: q } });
+    showToast(`Requested ${q.toUpperCase()} quality`, "info");
+  };
+
   // ═══════════════════════════════════════════
   // Render
   // ═══════════════════════════════════════════
@@ -201,7 +209,17 @@ export default function ClientPanel() {
             <span className="dot" /> Live — {sessionId}
           </span>
         </div>
-        <div className="session-controls">
+        <div className="session-controls" style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+          <select
+            className="input"
+            style={{ padding: "6px 10px", margin: 0, height: "auto", minHeight: "36px", fontSize: "14px" }}
+            value={videoQuality}
+            onChange={changeQuality}
+          >
+            <option value="high">1080p - 60 FPS (Fast Net)</option>
+            <option value="medium">720p - 30 FPS (Normal)</option>
+            <option value="low">480p - 15 FPS (Slow Net)</option>
+          </select>
           <button className="btn btn-primary" onClick={toggleFullScreen}>
             📺 Fullscreen
           </button>

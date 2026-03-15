@@ -393,6 +393,12 @@ body::before {
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
 }
 
+select.input option {
+  background-color: var(--bg-primary); /* خلفية داكنة */
+  color: var(--text-primary);          /* نص أبيض/رمادي فاتح */
+  font-family: 'Inter', sans-serif;
+}
+
 /* ═══════════════════════════════════════════
    Session Code
 ═══════════════════════════════════════════ */

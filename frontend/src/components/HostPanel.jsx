@@ -125,9 +125,27 @@ export default function HostPanel() {
   };
 
   // ── Remote control handler ────────────────────────────────
-  const handleRemoteControl = (event) => {
-    // In Electron/desktop agent this would trigger real mouse/keyboard
-    console.log("[Remote Control]", event);
+  const handleRemoteControl = async (event) => {
+    // Quality adjustment request from client
+    if (event.type === "quality" && streamRef.current) {
+      const videoTrack = streamRef.current.getVideoTracks()[0];
+      if (videoTrack) {
+        try {
+          if (event.value === "high") {
+            await videoTrack.applyConstraints({ frameRate: { max: 60 }, width: { max: 1920 }, height: { max: 1080 } });
+            showToast("Client requested HIGH quality", "info");
+          } else if (event.value === "low") {
+            await videoTrack.applyConstraints({ frameRate: { max: 15 }, width: { max: 854 }, height: { max: 480 } });
+            showToast("Client requested LOW quality", "info");
+          } else {
+            await videoTrack.applyConstraints({ frameRate: { max: 30 }, width: { max: 1280 }, height: { max: 720 } });
+            showToast("Client requested MEDIUM quality", "info");
+          }
+        } catch (e) {
+          console.error("Failed to apply constraints:", e);
+        }
+      }
+    }
   };
 
   // ── End session ───────────────────────────────────────────

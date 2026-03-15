@@ -90,11 +90,40 @@ io.on("connection", (socket) => {
     io.to(target).emit("signal:ice", { candidate });
   });
 
-  // ── Remote control events relay ─────────────────────────────────────
-  socket.on("control:event", ({ sessionId, event }) => {
+  // ── Native OS remote control via nut-js ─────────────────────────────
+  socket.on("control:event", async ({ sessionId, event }) => {
     const session = sessions.get(sessionId);
     if (!session) return;
+    
+    // Also notify host UI if needed
     io.to(session.hostSocketId).emit("control:event", { event });
+
+    // Try executing native controls (Since this server runs on the Host machine)
+    try {
+      const { mouse, keyboard, Point, Button, Key } = require("@nut-tree-fork/nut-js");
+      const screenWidth = await require("@nut-tree-fork/nut-js").screen.width();
+      const screenHeight = await require("@nut-tree-fork/nut-js").screen.height();
+
+      if (event.type === "mousemove") {
+        // x and y are fractions (0.0 to 1.0)
+        const targetX = Math.floor(event.x * screenWidth);
+        const targetY = Math.floor(event.y * screenHeight);
+        await mouse.setPosition(new Point(targetX, targetY));
+      } 
+      else if (event.type === "click") {
+        if (event.button === 0) await mouse.leftClick();
+        if (event.button === 2) await mouse.rightClick();
+      } 
+      else if (event.type === "keydown") {
+        // Basic keyboard mapping example (can be expanded)
+        if (event.key === "Enter") await keyboard.type(Key.Enter);
+        else if (event.key === "Backspace") await keyboard.type(Key.Backspace);
+        else if (event.key.length === 1) await keyboard.type(event.key); // letter/number
+      }
+    } catch (err) {
+       // Ignore if not running natively or error occurs
+       console.log("Nut.js error:", err.message);
+    }
   });
 
   // ── Chat messages ───────────────────────────────────────────────────
