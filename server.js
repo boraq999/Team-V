@@ -38,11 +38,12 @@ io.on("connection", (socket) => {
   console.log(`[+] Socket connected: ${socket.id}`);
 
   // ── HOST: create a session ──────────────────────────────────────────
-  socket.on("host:create", () => {
+  socket.on("host:create", ({ mode = "control" } = {}) => {
     const sessionId = generateCode();
     sessions.set(sessionId, {
       hostSocketId: socket.id,
       clientSocketId: null,
+      mode: mode,
       createdAt: Date.now(),
     });
     socket.join(sessionId);
@@ -95,7 +96,12 @@ io.on("connection", (socket) => {
     const session = sessions.get(sessionId);
     if (!session) return;
     
-    // Also notify host UI if needed
+    // Block system controls if session is view-only (allow quality changes)
+    if (session.mode === "view" && event.type !== "quality") {
+      return; 
+    }
+
+    // Also notify host UI if needed (host UI needs to know about 'quality' event)
     io.to(session.hostSocketId).emit("control:event", { event });
 
     // Try executing native controls (Since this server runs on the Host machine)

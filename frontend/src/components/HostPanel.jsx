@@ -10,6 +10,7 @@ export default function HostPanel() {
 
   const [sessionId, setSessionId] = useState(null);
   const [status, setStatus] = useState("idle"); // idle | waiting | connected | capturing
+  const [controlMode, setControlMode] = useState("control");
   const [isCapturing, setIsCapturing] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
 
@@ -68,7 +69,7 @@ export default function HostPanel() {
 
   // ── Create session ────────────────────────────────────────
   const createSession = () => {
-    emit("host:create");
+    emit("host:create", { mode: controlMode });
   };
 
   // ── Start screen share & WebRTC offer ────────────────────
@@ -183,6 +184,18 @@ export default function HostPanel() {
         <p className="card-desc">
           Create a session and share the code with whoever needs to connect to your device remotely.
         </p>
+        <div className="input-group" style={{ marginBottom: "20px" }}>
+          <label className="input-label">Session Mode</label>
+          <select 
+            className="input" 
+            style={{ cursor: "pointer" }}
+            value={controlMode} 
+            onChange={(e) => setControlMode(e.target.value)}
+          >
+            <option value="control">🎮 Full Control</option>
+            <option value="view">👁️ View Only</option>
+          </select>
+        </div>
         <button className="btn btn-primary btn-full" onClick={createSession} id="btn-create-session">
           <span>⚡</span> Create Session
         </button>
@@ -193,7 +206,9 @@ export default function HostPanel() {
   return (
     <div className="card animate-fadeIn">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 className="card-title" style={{ margin: 0 }}>Your Session</h2>
+        <h2 className="card-title" style={{ margin: 0 }}>
+          Your Session {controlMode === "view" && <span style={{ fontSize: "12px", background: "rgba(255,255,255,0.1)", padding: "2px 8px", borderRadius: "12px", marginLeft: "8px", verticalAlign: "middle" }}>👁️ View Only</span>}
+        </h2>
         <span className={`status-badge ${status === "connected" ? "connected" : "waiting"}`}>
           <span className="dot" />
           {status === "connected" ? "Client Connected" : "Waiting for client…"}
