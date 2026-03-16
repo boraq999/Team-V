@@ -15,11 +15,11 @@ export default function ChatPanel({ messages, onSend, myName }) {
   };
 
   return (
-    <div className="chat-panel mt-2">
+    <div className="chat-panel mt-2" style={{ flex: 1, height: "260px", display: "flex", flexDirection: "column" }}>
       <div className="chat-header">
         💬 Chat — <span style={{ color: "#a5b4fc" }}>{myName}</span>
       </div>
-      <div className="chat-messages">
+      <div className="chat-messages" style={{ flex: 1 }}>
         {messages.length === 0 && (
           <p style={{ color: "var(--text-muted)", fontSize: "12px", textAlign: "center", marginTop: 16 }}>
             No messages yet…

@@ -88,8 +88,8 @@ function AppContent() {
         )}
 
         {mode === "host" && (
-          <div style={{ maxWidth: 440, margin: "48px auto", padding: "0 24px" }}>
-            <button className="btn btn-ghost mb-2" onClick={goBack} id="btn-back-host">
+          <div style={{ maxWidth: 1400, margin: "48px auto", padding: "0 24px", width: "100%" }}>
+            <button className="btn btn-ghost mb-2" onClick={goBack} id="btn-back-host" style={{ marginBottom: "16px" }}>
               ← Back
             </button>
             <HostPanel />

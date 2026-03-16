@@ -10,6 +10,7 @@ app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, {
+  maxHttpBufferSize: 50 * 1024 * 1024, // 50MB limit for file sharing
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
@@ -43,6 +44,7 @@ io.on("connection", (socket) => {
     sessions.set(sessionId, {
       hostSocketId: socket.id,
       clientSocketIds: new Set(),
+      sharedFiles: [], // Store file history for late joiners
       mode: mode,
       createdAt: Date.now(),
     });
@@ -67,6 +69,14 @@ io.on("connection", (socket) => {
     // Notify host with the clientId so it can create a separate PeerConnection for them
     io.to(session.hostSocketId).emit("host:client-joined", { sessionId, clientId: socket.id });
     socket.emit("client:joined", { sessionId, clientId: socket.id });
+    
+    // Sync existing files to the new client
+    if (session.sharedFiles.length > 0) {
+      session.sharedFiles.forEach(file => {
+        socket.emit("file:share", file);
+      });
+    }
+
     console.log(`[Session] Client joined: ${sessionId} | ID: ${socket.id}`);
   });
 
@@ -135,6 +145,16 @@ io.on("connection", (socket) => {
   // ── Chat messages ───────────────────────────────────────────────────
   socket.on("chat:message", ({ sessionId, text, sender }) => {
     io.to(sessionId).emit("chat:message", { text, sender, time: Date.now() });
+  });
+
+  // ── File Sharing ────────────────────────────────────────────────────
+  socket.on("file:share", ({ sessionId, fileData, fileName, fileType }) => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+
+    const fileObj = { fileData, fileName, fileType, time: Date.now() };
+    session.sharedFiles.push(fileObj); // Save to session history
+    io.to(sessionId).emit("file:share", fileObj);
   });
 
   // ── Disconnect ──────────────────────────────────────────────────────

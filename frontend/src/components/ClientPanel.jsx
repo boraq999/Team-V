@@ -3,6 +3,7 @@ import { useSocket } from "../hooks/useSocket";
 import { useWebRTC } from "../hooks/useWebRTC";
 import { useToast } from "../context/ToastContext";
 import ChatPanel from "./ChatPanel";
+import FilesPanel from "./FilesPanel";
 
 export default function ClientPanel() {
   const { emit, on } = useSocket();
@@ -12,6 +13,7 @@ export default function ClientPanel() {
   const [sessionId, setSessionId] = useState(null);
   const [status, setStatus] = useState("idle"); // idle | joining | connected
   const [chatMessages, setChatMessages] = useState([]);
+  const [sharedFiles, setSharedFiles] = useState([]);
   const [remoteStream, setRemoteStream] = useState(null);
   const [videoQuality, setVideoQuality] = useState("medium");
 
@@ -21,9 +23,11 @@ export default function ClientPanel() {
   // Attach the stream whenever the video element mounts or stream changes
   useEffect(() => {
     if (videoRef.current && remoteStream) {
-      videoRef.current.srcObject = remoteStream;
+      if (videoRef.current.srcObject !== remoteStream) {
+        videoRef.current.srcObject = remoteStream;
+      }
     }
-  }, [remoteStream, status]);
+  }); // Runs on every render to ensure srcObject isn't dropped
 
   const handleStream = useCallback((stream) => {
     setRemoteStream(stream);
@@ -67,6 +71,10 @@ export default function ClientPanel() {
       setChatMessages((prev) => [...prev, { text, sender, time }]);
     });
 
+    const offFile = on("file:share", (fileObj) => {
+      setSharedFiles((prev) => [...prev, fileObj]);
+    });
+
     const offEnded = on("session:ended", ({ reason }) => {
       showToast(reason, "error");
       disconnect();
@@ -78,7 +86,7 @@ export default function ClientPanel() {
     });
 
     return () => {
-      [offJoined, offOffer, offIce, offChat, offEnded, offError].forEach(
+      [offJoined, offOffer, offIce, offChat, offFile, offEnded, offError].forEach(
         (fn) => typeof fn === "function" && fn()
       );
     };
@@ -126,6 +134,7 @@ export default function ClientPanel() {
     setCode("");
     setRemoteStream(null);
     setChatMessages([]);
+    setSharedFiles([]);
   };
 
   const sendChat = (text) => {
@@ -246,7 +255,10 @@ export default function ClientPanel() {
         />
       </div>
 
-      <ChatPanel messages={chatMessages} onSend={sendChat} myName="Client" />
+      <div style={{ display: "flex", gap: "20px", marginTop: "16px" }}>
+        <ChatPanel messages={chatMessages} onSend={sendChat} myName="Client" />
+        <FilesPanel files={sharedFiles} allowUpload={false} />
+      </div>
     </div>
   );
 }

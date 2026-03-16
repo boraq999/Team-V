@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useSocket } from "../hooks/useSocket";
 import { useToast } from "../context/ToastContext";
 import ChatPanel from "./ChatPanel";
+import FilesPanel from "./FilesPanel";
 
 export default function HostPanel() {
   const { emit, on } = useSocket();
@@ -12,11 +13,30 @@ export default function HostPanel() {
   const [controlMode, setControlMode] = useState("control");
   const [isCapturing, setIsCapturing] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
+  const [sharedFiles, setSharedFiles] = useState([]);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const peersRef = useRef(new Map()); // Map<clientId, RTCPeerConnection>
   const dataChannelsRef = useRef(new Map()); // Map<clientId, RTCDataChannel>
+
+  // ── Auto-attach stream to video tag to prevent black screen on re-renders ──
+  useEffect(() => {
+    let timeout;
+    const attach = () => {
+      if (isCapturing && videoRef.current && streamRef.current) {
+        if (videoRef.current.srcObject !== streamRef.current) {
+          console.log("[Host] Attaching local stream to video tag...");
+          videoRef.current.srcObject = streamRef.current;
+        }
+      }
+    };
+    
+    attach();
+    // Double check after a small delay because React might be mounting the video tag
+    timeout = setTimeout(attach, 100);
+    return () => clearTimeout(timeout);
+  }, [isCapturing, status]); // Run when capturing state or status changes
 
   // ── Socket events ─────────────────────────────────────────
   useEffect(() => {
@@ -29,6 +49,7 @@ export default function HostPanel() {
     const offJoined = on("host:client-joined", async ({ sessionId, clientId }) => {
       // If we are waiting, move to connected status
       setStatus("connected");
+      setChatMessages(prev => [...prev, { sender: "System", text: `User ${clientId.substring(0,4)} joined the session`, time: Date.now() }]);
       showToast(`Client ${clientId.substring(0, 4)} connected!`, "success");
       await startOffer(sessionId, clientId);
     });
@@ -48,6 +69,7 @@ export default function HostPanel() {
       if (pc) pc.close();
       peersRef.current.delete(clientId);
       dataChannelsRef.current.delete(clientId);
+      setChatMessages(prev => [...prev, { sender: "System", text: `User ${clientId.substring(0,4)} left the session`, time: Date.now() }]);
       showToast(`Client ${clientId.substring(0, 4)} left`, "info");
       
       // If no more clients, go back to waiting (but keep stream active)
@@ -62,6 +84,10 @@ export default function HostPanel() {
       setChatMessages((prev) => [...prev, { text, sender, time }]);
     });
 
+    const offFile = on("file:share", (fileObj) => {
+      setSharedFiles((prev) => [...prev, fileObj]);
+    });
+
     const offEnded = on("session:ended", ({ reason }) => {
       showToast(reason, "error");
       endSession();
@@ -72,7 +98,7 @@ export default function HostPanel() {
     });
 
     return () => {
-      [offCreated, offJoined, offAnswer, offIce, offLeft, offControl, offChat, offEnded, offError].forEach(
+      [offCreated, offJoined, offAnswer, offIce, offLeft, offControl, offChat, offFile, offEnded, offError].forEach(
         (fn) => typeof fn === "function" && fn()
       );
     };
@@ -95,7 +121,7 @@ export default function HostPanel() {
       setIsCapturing(true);
 
       // CRITICAL: if clients are already connected, add the stream now
-      for (const [clientId, pc] of peersRef.current.entries()) {
+      for (const [clientId, pc] of peersRef.current) {
         if (pc.iceConnectionState !== "closed") {
           console.log(`[Host] Adding tracks to peer ${clientId}...`);
           stream.getTracks().forEach((track) => pc.addTrack(track, stream));
@@ -189,11 +215,17 @@ export default function HostPanel() {
     setStatus("idle");
     setIsCapturing(false);
     setChatMessages([]);
+    setSharedFiles([]);
   };
 
   const sendChat = (text) => {
     if (!sessionId) return;
     emit("chat:message", { sessionId, text, sender: "Host" });
+  };
+
+  const handleFileUpload = (fileObj) => {
+    if (!sessionId) return;
+    emit("file:share", { sessionId, ...fileObj });
   };
 
   const copyCode = () => {
@@ -204,80 +236,108 @@ export default function HostPanel() {
   // ═══════════════════════════════════════════
   // Render
   // ═══════════════════════════════════════════
-  if (status === "idle") {
-    return (
-      <div className="card animate-fadeInUp">
-        <div className="card-icon purple">🖥️</div>
-        <h2 className="card-title">Share Your Screen</h2>
-        <p className="card-desc">
-          Create a session and share the code with whoever needs to connect to your device remotely.
-        </p>
-        <div className="input-group" style={{ marginBottom: "20px" }}>
-          <label className="input-label">Session Mode</label>
-          <select 
-            className="input" 
-            style={{ cursor: "pointer" }}
-            value={controlMode} 
-            onChange={(e) => setControlMode(e.target.value)}
-          >
-            <option value="control">🎮 Full Control</option>
-            <option value="view">👁️ View Only</option>
-          </select>
-        </div>
-        <button className="btn btn-primary btn-full" onClick={createSession} id="btn-create-session">
-          <span>⚡</span> Create Session
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <div className="card animate-fadeIn">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 className="card-title" style={{ margin: 0 }}>
-          Your Session {controlMode === "view" && <span style={{ fontSize: "12px", background: "rgba(255,255,255,0.1)", padding: "2px 8px", borderRadius: "12px", marginLeft: "8px", verticalAlign: "middle" }}>👁️ View Only</span>}
-        </h2>
-        <span className={`status-badge ${status === "connected" ? "connected" : "waiting"}`}>
-          <span className="dot" />
-          {status === "connected" ? `${peersRef.current.size} Clients Connected` : "Waiting for client…"}
-        </span>
-      </div>
-
-      <div className="session-code-box">
-        <div className="session-code-label">Your Session Code</div>
-        <div className="session-code">{sessionId}</div>
-        <div className="session-code-hint">Share this code with the remote user</div>
-      </div>
-
-      <div style={{ display: "flex", gap: "10px", marginBottom: 16 }}>
-        <button className="btn btn-ghost" style={{ flex: 1 }} onClick={copyCode} id="btn-copy-code">
-          📋 Copy Code
-        </button>
-        {!isCapturing ? (
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={startCapture} id="btn-start-capture">
-            🎬 Share Screen
-          </button>
+    <div className="animate-fadeIn" style={{ display: "flex", gap: "24px", maxWidth: "1400px", margin: "0 auto", alignItems: "stretch", minHeight: "75vh", width: "100%" }}>
+      
+      {/* Sidebar Area - Fixed Width for PC */}
+      <div className="card" style={{ flex: "0 0 380px", display: "flex", flexDirection: "column", overflowY: "auto", maxHeight: "80vh" }}>
+        {status === "idle" ? (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div className="card-icon purple">🖥️</div>
+              <h2 className="card-title">Host Controls</h2>
+              <p className="card-desc">Welcome to Team V Desktop Agent.<br/>Select session type and start hosting your machine.</p>
+            
+              <div className="input-group" style={{ marginTop: "auto", marginBottom: "20px" }}>
+                <label className="input-label">Session Mode</label>
+                <select className="input" style={{ cursor: "pointer" }} value={controlMode} onChange={(e) => setControlMode(e.target.value)}>
+                  <option value="control">🎮 Full Control</option>
+                  <option value="view">👁️ View Only</option>
+                </select>
+              </div>
+              <button className="btn btn-primary btn-full" onClick={createSession} id="btn-create-session">
+                <span>⚡</span> Create Session
+              </button>
+            </div>
+          </>
         ) : (
-          <span className="status-badge connected" style={{ flex: 1, justifyContent: "center" }}>
-            <span className="dot" /> Streaming
-          </span>
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h2 className="card-title" style={{ margin: 0, fontSize: "16px" }}>
+                Details
+                {controlMode === "view" && <span style={{ fontSize: "11px", background: "rgba(255,255,255,0.1)", padding: "2px 8px", borderRadius: "12px", marginLeft: "8px", verticalAlign: "middle" }}>👁️ View Only</span>}
+              </h2>
+              <span className={`status-badge ${status === "connected" ? "connected" : "waiting"}`}>
+                <span className="dot" />
+                {status === "connected" ? `${peersRef.current.size} Clients` : "Waiting"}
+              </span>
+            </div>
+
+            <div className="session-code-box" style={{ padding: "16px", marginBottom: "16px" }}>
+              <div className="session-code-label">Session Code</div>
+              <div className="session-code" style={{ fontSize: "32px", letterSpacing: "6px" }}>{sessionId}</div>
+            </div>
+
+            <div style={{ display: "flex", gap: "10px", marginBottom: 16 }}>
+              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={copyCode} id="btn-copy-code">
+                📋 Copy Code
+              </button>
+              {!isCapturing ? (
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={startCapture} id="btn-start-capture">
+                  🎬 Share Screen
+                </button>
+              ) : (
+                <span className="status-badge connected" style={{ flex: 1, justifyContent: "center" }}>
+                  <span className="dot" /> Streaming
+                </span>
+              )}
+            </div>
+
+            <button className="btn btn-danger btn-full" onClick={endSession} id="btn-end-session" style={{ marginBottom: status === "connected" ? 20 : 0 }}>
+              🔴 End Session
+            </button>
+
+            {status === "connected" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px", marginTop: "16px" }}>
+                <ChatPanel messages={chatMessages} onSend={sendChat} myName="Host" allowFiles={false} />
+                <FilesPanel files={sharedFiles} onUpload={handleFileUpload} allowUpload={true} />
+              </div>
+            )}
+          </div>
         )}
       </div>
 
-      {/* Local preview */}
-      {isCapturing && (
-        <div className="screen-container" style={{ marginBottom: 16 }}>
-          <video ref={videoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%" }} />
+      {/* Main Area - Big screen for desktop focus */}
+      <div className="card" style={{ flex: "1", padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)", background: "rgba(0,0,0,0.2)" }}>
+          <h2 className="card-title" style={{ margin: 0, fontSize: "16px" }}>
+            {status === "idle" ? "System View" : "Live Preview"}
+          </h2>
         </div>
-      )}
+        <div style={{ padding: "20px", background: "var(--bg-primary)", flex: 1, display: "flex", position: "relative" }}>
+          {status === "idle" ? (
+             <div style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--bg-secondary)", borderRadius: "8px", border: "1px dashed var(--border)" }}>
+               <div style={{ fontSize: "64px", marginBottom: "24px", opacity: 0.3 }}>🖥️</div>
+               <p style={{ color: "var(--text-muted)", fontSize: "18px", fontWeight: "500" }}>System is Ready.</p>
+               <p style={{ color: "var(--text-muted)", fontSize: "14px", marginTop: "8px" }}>Configure your session from the side panel to proceed.</p>
+             </div>
+          ) : (
+            <div className="screen-container" style={{ width: "100%", height: "100%", borderRadius: "8px", overflow: "hidden", display: isCapturing ? "block" : "none" }}>
+              <video ref={videoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }} />
+            </div>
+          )}
+          
+          {status !== "idle" && !isCapturing && (
+            <div className="screen-container" style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#06090e", borderRadius: "8px", border: "1px solid var(--border)" }}>
+              <div style={{ textAlign: "center" }}>
+                 <div style={{ fontSize: "40px", marginBottom: "16px", opacity: 0.5 }}>⏸️</div>
+                 <p style={{ color: "var(--text-muted)", fontSize: "16px" }}>Screen recording stopped.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
-      <button className="btn btn-danger btn-full" onClick={endSession} id="btn-end-session">
-        🔴 End Session
-      </button>
-
-      {status === "connected" && (
-        <ChatPanel messages={chatMessages} onSend={sendChat} myName="Host" />
-      )}
     </div>
   );
 }
