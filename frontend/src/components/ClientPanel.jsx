@@ -24,7 +24,13 @@ export default function ClientPanel() {
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       if (videoRef.current.srcObject !== remoteStream) {
+        console.log("[Client] Attaching stream to video for mobile...");
         videoRef.current.srcObject = remoteStream;
+        
+        // Mobile browsers often need an explicit play call after setting srcObject
+        videoRef.current.play().catch(err => {
+          console.log("[Client] Auto-play prevented on mobile, waiting for interaction", err);
+        });
       }
     }
   }); // Runs on every render to ensure srcObject isn't dropped
@@ -80,13 +86,22 @@ export default function ClientPanel() {
       disconnect();
     });
 
+    const offStreamUpdated = on("host:stream-updated", () => {
+      console.log("[Client] Host stream updated, ensuring visibility...");
+      // Re-triggering setRemoteStream if it exists to nudge the UI
+      if (remoteStream) {
+        setRemoteStream(null);
+        setTimeout(() => setRemoteStream(remoteStream), 50);
+      }
+    });
+
     const offError = on("error", ({ message }) => {
       showToast(message, "error");
       setStatus("idle");
     });
 
     return () => {
-      [offJoined, offOffer, offIce, offChat, offFile, offEnded, offError].forEach(
+      [offJoined, offOffer, offIce, offChat, offFile, offEnded, offError, offStreamUpdated].forEach(
         (fn) => typeof fn === "function" && fn()
       );
     };
@@ -250,8 +265,18 @@ export default function ClientPanel() {
         <video
           ref={videoRef}
           autoPlay
+          muted
           playsInline
-          style={{ width: "100%", height: "100%", background: "#000" }}
+          webkit-playsinline="true"
+          disablePictureInPicture
+          controls={false}
+          style={{ 
+            width: "100%", 
+            height: "100%", 
+            background: "#000",
+            imageRendering: "auto",
+            display: "block"
+          }}
         />
       </div>
 

@@ -144,10 +144,64 @@ export default function HostPanel() {
     }
   };
 
+  const switchScreen = async () => {
+    try {
+      const newStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30, cursor: "always" },
+        audio: false,
+      });
+
+      // Stop old tracks
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
+
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      streamRef.current = newStream;
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = newStream;
+      }
+
+      // Replace tracks for all connected peers
+      for (const [clientId, pc] of peersRef.current) {
+        const senders = pc.getSenders();
+        const videoSender = senders.find(s => s.track && s.track.kind === "video");
+        
+        if (videoSender) {
+          console.log(`[Host] Replacing video track for client ${clientId}...`);
+          await videoSender.replaceTrack(newVideoTrack);
+        } else {
+          // If for some reason there was no sender (e.g. capture was stopped), re-add
+          newStream.getTracks().forEach(track => pc.addTrack(track, newStream));
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          emit("signal:offer", { sessionId, offer, targetClientId: clientId });
+        }
+      }
+
+      // Notify all clients that the stream has been updated (helps with black screen issues)
+      emit("host:stream-updated", { sessionId });
+
+      showToast("Screen switched successfully", "success");
+
+      newVideoTrack.addEventListener("ended", () => {
+        setIsCapturing(false);
+        showToast("Screen sharing stopped", "info");
+      });
+
+    } catch (err) {
+      showToast("Switch screen failed: " + err.message, "error");
+    }
+  };
+
   const startOffer = async (sid, clientId) => {
     // Manually create PeerConnection because useWebRTC handles only 1
     const pc = new RTCPeerConnection({
-       iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }]
+       iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }],
+       bundlePolicy: "max-bundle",
+       rtcpMuxPolicy: "require",
+       sdpSemantics: "unified-plan"
     });
 
     peersRef.current.set(clientId, pc);
@@ -287,9 +341,9 @@ export default function HostPanel() {
                   🎬 Share Screen
                 </button>
               ) : (
-                <span className="status-badge connected" style={{ flex: 1, justifyContent: "center" }}>
-                  <span className="dot" /> Streaming
-                </span>
+                <button className="btn btn-primary" style={{ flex: 1, background: "linear-gradient(135deg, #fbbf24, #f59e0b)" }} onClick={switchScreen} id="btn-switch-screen">
+                  🔄 Switch Screen
+                </button>
               )}
             </div>
 

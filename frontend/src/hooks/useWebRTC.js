@@ -6,6 +6,9 @@ const ICE_SERVERS = {
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
   ],
+  bundlePolicy: "max-bundle",
+  rtcpMuxPolicy: "require",
+  sdpSemantics: "unified-plan"
 };
 
 export function useWebRTC({ onStream, onDataChannel }) {
